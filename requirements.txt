@@ -1,0 +1,5 @@
+chromadb
+crewai
+ollama
+kokoro-onnx
+boto3

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sermon — PreechBot</title>
+<style>body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:16px;line-height:1.6}
+h1{color:#ff00aa;border-bottom:2px solid #ff00aa;padding-bottom:8px}
+.audio{margin:12px 0}</style>
+</head>
+<body>
+<div id="s"></div>
+<script>
+fetch('/api/sermon/'+window.location.pathname.split('/').pop())
+.then(r=>r.json()).then(d=>{
+  document.getElementById('s').innerHTML=`
+  <h1>${d.title}</h1>
+  <div style="color:#aaa">Passage: ${d.passage} | Status: ${d.status}</div>
+  <div class="audio">${d.audio ? '<audio controls src="'+d.audio+'" style="width:100%"></audio>' : '<em>No audio</em>'}</div>
+  <p style="white-space:pre-wrap;background:#222;padding:12px;border-left:4px solid #ff00aa">${d.preview}</p>`;
+});
+</script>
+</body>
+</html>

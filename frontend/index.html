@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"><meta name="theme-color" content="#111"><link rel="manifest" href="/manifest.json">
+<title>PreechBot :: Genesis Study</title>
+<style>
+@font-face{font-family:'RS';src:local('Courier New'),local(monaco);}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#4a7c59 url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%235a7d4a%22 width=%22100%22 height=%22100%22/%3E%3Cpath d=%22M0 50 Q 25 30 50 50 T 100 50%22 stroke=%22%2343883a%22 stroke-width=%222%22 fill=%22none%22/%3E%3C/svg%3E');font-family:'Courier New',Courier,monospace;color:#f0e6c8;background-size:100% 100vh}
+.container{max-width:980px;margin:30px auto;border:4px solid #8b6f2f;background:#d4c8a8;padding:20px;box-shadow:0 10px 0 #4a3a1a}
+h1{font-family:'Courier New',monospace;font-size:28px;color:#3a2e1a;border-bottom:3px solid #8b6f2f;padding-bottom:10px;text-shadow:2px 2px 0 #cbb27a;text-transform:uppercase;letter-spacing:2px}
+h2{font-size:18px;color:#5b4a2a;border:2px solid #8b6f2f;padding:4px 8px;display:inline-block;background:#f0e6c8;margin:10px 0}
+.sermon{border:3px groove #8b6f2f;background:#e8dcc8;padding:12px;margin:10px 0;box-shadow:inset 0 0 20px rgba(139,111,47,0.2)}
+.title{font-size:20px;color:#3a2e1a;font-weight:bold;text-decoration:underline}
+.meta{font-size:12px;color:#6a5c3a;margin:4px 0}
+.tags{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.tag{border:2px solid #8b6f2f;padding:2px 6px;font-size:10px;background:#5b4a2a;color:#e8dcc8;text-transform:uppercase;font-weight:bold}
+.search{border:3px solid #8b6f2f;padding:8px;background:#f0e6c8;margin-bottom:10px}
+.search input{width:70%;border:3px inset #8b6f2f;padding:4px;font-family:inherit;background:#fff;color:#3a2e1a;font-size:14px}
+.search button{border:3px solid #8b6f2f;background:#5b4a2a;color:#e8dcc8;padding:4px 12px;font-family:inherit;font-weight:bold;cursor:pointer}
+.search button:hover{background:#8b6f2f}
+.audio-link{display:inline-block;border:3px dashed #8b6f2f;padding:4px 8px;color:#3a2e1a;background:#e8dcc8;text-decoration:none;font-weight:bold;margin-top:6px}
+ footer{border-top:3px solid #8b6f2f;padding-top:10px;margin-top:20px;font-size:12px;color:#5a4a2a;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>PreechBot :: Nightly Genesis Study</h1>
+<p style="font-size:14px;color:#6a5c3a;margin-bottom:10px">Sermon archive — auto-updates when new files hit the database.</p>
+
+<div class="search">
+  <input type="text" id="q" placeholder="Search passages or tags ('Genesis 10' / 'family' / 'raising kids')" onkeyup="filter()">
+  <button onclick="filter()">Search</button>
+</div>
+
+<div id="sermons"></div>
+
+<footer>
+PreechBot Cron :: Daily 3-5 sermons from Genesis :: Audio via Kokoro (Irish female) :: Logs to preech_log_YYYY-MM-DD.txt :: DB: preech.db
+</footer>
+</div>
+
+<script>
+// Auto-load from local sermon data (simulated / could fetch JSON endpoint)
+const sermons = [];
+
+function render(list) {
+  const box = document.getElementById('sermons');
+  if (!list.length) { box.innerHTML='<h2>No sermons found</h2>'; return; }
+  box.innerHTML = list.map((s, i) => {
+    const passage = s.passage || `${s.book} ${s.chapter}:${s.start}-${s.end}`;
+    const audioLink = s.audio
+      ? `<audio controls preload="none" src="${s.audio}" style="width:100%;margin-top:8px"></audio>`
+      : `<div class="audio-link" style="opacity:0.5">⏳ No Audio Yet</div>`;
+    return `
+<div class="sermon" id="sermon-${s.id}">
+  <div class="title" style="cursor:pointer" onclick="toggleSermon(${s.id})">${s.title} &#9658;</div>
+  <div class="meta">Passage: ${passage} | Status: ${s.status} | Words: ${s.word_count || (s.preview||'').split(' ').length}</div>
+  <div class="tags">${s.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>
+  <p class="preview" style="font-size:13px;color:#3a2e1a;margin:8px 0;line-height:1.5">${(s.preview || '').substring(0, 300)}${s.preview && s.preview.length > 300 ? '...' : ''}</p>
+  <div id="full-${s.id}" class="sermon-full" style="display:none;font-size:13px;color:#3a2e1a;line-height:1.6;margin-top:10px;white-space:pre-wrap;background:#f0e6c8;padding:12px;border:2px solid #8b6f2f"></div>
+  <button class="read-more" onclick="toggleSermon(${s.id})" style="font-size:11px;padding:3px 8px;border:2px solid #8b6f2f;background:#5b4a2a;color:#e8dcc8;cursor:pointer;margin-top:4px">Read Full Text</button>
+  ${audioLink}
+</div>`;
+  }).join('');
+}
+
+function toggleSermon(id) {
+  window.location.href = '/sermon/' + id;
+}
+
+// Global store for sermons data
+window._sermonsDb = [];
+
+function filter() {
+  const q = document.getElementById('q').value.toLowerCase();
+  const filtered = sermons.filter(s => (s.title+s.book+s.tags.join(' ')).toLowerCase().includes(q));
+  render(filtered);
+}
+
+// Auto-fetch from server when available
+async function loadFromServer() {
+  try {
+    const resp = await fetch('/api/sermons');
+    const data = await resp.json();
+    if (Array.isArray(data) && data.length > 0) {
+      sermons.length = 0;
+      data.forEach(s => sermons.push({
+        title: s.title,
+        book: s.book,
+        chapter: s.chapter,
+        start: s.start,
+        end: s.end,
+        status: s.status,
+        tags: s.tags || [],
+        preview: s.preview,
+        audio: s.audio,
+        word_count: s.word_count,
+        passage: s.passage,
+      }));
+      render(sermons);
+      console.log('Loaded', sermons.length, 'sermons from DB');
+    }
+  } catch (e) {
+    console.log('Server not reachable — showing static view');
+    render(sermons);
+  }
+}
+
+loadFromServer();
+render(sermons);
+</script>
+</body>
+</html>
