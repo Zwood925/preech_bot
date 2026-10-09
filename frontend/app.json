@@ -1,29 +1,34 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "Preech Bot",
+    "slug": "preech-bot",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.preechbot.app",
+      "userInterfaceStyle": "dark",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "plugins": [
-      "expo-audio",
-      "expo-sharing"
-    ]
+      "expo-asset",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#070A12"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3e7ad03a-1632-4ea7-9cc3-a2243ed1ab57"
+      }
+    }
   }
 }

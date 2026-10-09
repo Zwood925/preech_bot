@@ -52,6 +52,7 @@ import {
   CheckCircle2,
   X,
   ChevronRight,
+  AlertCircle,
 } from 'lucide-react-native';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -61,6 +62,9 @@ import {
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
 import { supabase } from './supabase';
+
+import * as SplashScreen from 'expo-splash-screen';
+SplashScreen.preventAutoHideAsync();
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SPEED_OPTIONS = [1.0, 1.25, 1.5, 2.0, 0.8];
@@ -113,6 +117,9 @@ export default function App() {
   const [isVectorSearching, setIsVectorSearching] = useState<boolean>(false);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [speedIndex, setSpeedIndex] = useState<number>(0);
+  
+  // Debug State
+  const [debugError, setDebugError] = useState<string | null>(null);
 
   // Offline Download State
   const [downloadedSermonIds, setDownloadedSermonIds] = useState<number[]>([]);
@@ -146,8 +153,17 @@ export default function App() {
       -1,
       true
     );
-    fetchAllSermons();
-  }, []);
+    
+    // Safety timeout to prevent infinite spinner
+    const timeout = setTimeout(() => {
+      if (loading || !fontsLoaded) {
+        setDebugError(`Loading timed out after 8 seconds.\nFonts Loaded: ${fontsLoaded}\nSermons Fetched: ${sermons.length > 0}`);
+        setLoading(false);
+      }
+    }, 8000);
+
+    fetchAllSermons().finally(() => clearTimeout(timeout));
+  }, [fontsLoaded]);
 
   useEffect(() => {
     if (currentSermon) {
@@ -155,26 +171,47 @@ export default function App() {
     }
   }, [currentSermon]);
 
+  useEffect(() => {
+    if (!loading && fontsLoaded) {
+      SplashScreen.hideAsync();
+    }
+  }, [loading, fontsLoaded]);
+
   const badgeAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: badgePulse.value }],
   }));
 
+  
+
   async function fetchAllSermons() {
     try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key) {
+        setDebugError(`Missing Env Vars!\nURL: ${url ? 'OK' : 'MISSING'}\nKEY: ${key ? 'OK' : 'MISSING'}`);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('sermons')
         .select('*')
         .order('id', { ascending: false });
 
-      if (error) console.error('Error fetching sermons:', error);
+      if (error) {
+        console.error('Error fetching sermons:', error);
+        setDebugError(`DB Error: ${error.message}`);
+      }
       if (data && data.length > 0) {
         setSermons(data);
         if (!currentSermon) {
           selectSermon(data[0], false);
         }
+      } else {
+        if (!error) setDebugError('No studies found in database.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setDebugError(`Exception: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -418,6 +455,22 @@ export default function App() {
     paragraphs.length - 1,
     Math.floor(progressPercent * paragraphs.length)
   );
+
+  // Diagnostic Error Render
+  if (debugError) {
+    return (
+      <View style={[styles.center, { padding: 32 }]}>
+        <AlertCircle size={48} color="#EF4444" style={{ marginBottom: 16 }} />
+        <Text style={{ color: '#F8FAFC', fontSize: 20, fontWeight: '700', marginBottom: 16 }}>Diagnostic Error</Text>
+        <Text style={{ color: '#EF4444', textAlign: 'center', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', backgroundColor: 'rgba(239, 68, 68, 0.1)', padding: 16, borderRadius: 12 }}>
+          {debugError}
+        </Text>
+        <TouchableOpacity style={{ marginTop: 24, backgroundColor: '#312E81', padding: 12, borderRadius: 12 }} onPress={() => { setDebugError(null); setLoading(true); fetchAllSermons(); }}>
+          <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>Retry Connection</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (loading || !fontsLoaded) {
     return (
@@ -1012,7 +1065,6 @@ const styles = StyleSheet.create({
 
   serifHeroTitle: { color: '#F8FAFC', fontSize: 28, fontFamily: 'Cinzel_700Bold', lineHeight: 34 },
 
-  // Home Front Page Styles
   homeHeroCardContainer: { borderRadius: 24, overflow: 'hidden', marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   homeHeroInner: { padding: 22 },
   homeHeroBadgeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
@@ -1029,7 +1081,6 @@ const styles = StyleSheet.create({
   recentIssueFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
   recentIssueAction: { color: '#818CF8', fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold' },
 
-  // Player Styles
   magazineHeroContainer: {
     height: 125,
     borderRadius: 22,
@@ -1084,7 +1135,6 @@ const styles = StyleSheet.create({
   transcriptBodyText: { color: '#CBD5E1', fontSize: 16, lineHeight: 28, fontFamily: 'PlusJakartaSans_500Medium' },
   activeTranscriptText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold' },
 
-  // Library Styles
   libraryContainer: { flex: 1, paddingHorizontal: 20 },
   serifLibraryTitle: { color: '#F8FAFC', fontSize: 28, fontFamily: 'Cinzel_700Bold', marginBottom: 16 },
   searchBarRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
@@ -1102,13 +1152,11 @@ const styles = StyleSheet.create({
   serifCardTitle: { color: '#F8FAFC', fontSize: 18, fontFamily: 'Cinzel_700Bold', marginBottom: 6 },
   cardSnippetText: { color: '#94A3B8', fontSize: 13, lineHeight: 19, fontFamily: 'PlusJakartaSans_500Medium' },
 
-  // Navigation Bar
   floatingNavGlass: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', backgroundColor: 'rgba(7, 10, 18, 0.8)', paddingBottom: 28, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.08)' },
   navTab: { flex: 1, alignItems: 'center', gap: 4 },
   navText: { color: '#64748B', fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium' },
   navTextActive: { color: '#F8FAFC', fontFamily: 'PlusJakartaSans_700Bold' },
 
-  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   modalGlassBox: { width: '100%', backgroundColor: 'rgba(30, 41, 59, 0.85)', borderRadius: 24, padding: 24, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   modalTitleText: { color: '#F8FAFC', fontSize: 18, fontFamily: 'Cinzel_700Bold', marginBottom: 14 },
@@ -1119,7 +1167,6 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: '#4F46E5', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 },
   saveBtnText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold' },
 
-  // Share Card Modal Styles
   shareModalContent: {
     width: '100%',
     maxHeight: SCREEN_HEIGHT * 0.85,
@@ -1201,7 +1248,6 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_700Bold',
   },
 
-  // Ask Pastor Chat Drawer Styles
   chatModalGlass: { width: '100%', height: '82%', backgroundColor: 'rgba(30, 41, 59, 0.9)', borderRadius: 28, padding: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   chatHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255, 255, 255, 0.08)' },
   chatTitleText: { color: '#F8FAFC', fontSize: 18, fontFamily: 'Cinzel_700Bold' },
