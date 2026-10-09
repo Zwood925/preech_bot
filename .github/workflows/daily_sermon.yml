@@ -2,7 +2,7 @@ name: Daily Sermon Generator
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Runs automatically every day at 6:00 AM UTC
+    - cron: '0 2 * * *' # Runs automatically every day at 2:00 AM UTC
   workflow_dispatch: # Enables a manual "Run workflow" button in GitHub
 
 jobs:
@@ -31,4 +31,4 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PRIMARY_MODEL: "google/gemini-2.0-flash-exp:free"
           FALLBACK_MODEL: "meta-llama/llama-3.3-70b-instruct:free"
-        run: python3 main.py --auto 1
+        run: python3 main.py --auto 20
