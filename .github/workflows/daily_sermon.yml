@@ -31,4 +31,4 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PRIMARY_MODEL: "google/gemini-2.0-flash-exp:free"
           FALLBACK_MODEL: "meta-llama/llama-3.3-70b-instruct:free"
-        run: python3 main.py --auto 20
+        run: python3 main.py --auto 2

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "google/gemini-2.5-flash")
+PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "google/gemini-2.5-flash-exp:free")
 FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "deepseek/deepseek-chat")
 
 if not OPENROUTER_API_KEY:
@@ -32,28 +32,30 @@ if "meta-llama/llama-3.3-70b-instruct" not in MODEL_FALLBACKS:
 
 
 def generate_sermon_draft(passage_ref: str) -> str:
-    """Pass 1: Drafts a creative title and 10-15 minute sermon script."""
+    """Pass 1: Drafts a creative title and 15-20 minute sermon script."""
     system_prompt = (
         "You are an experienced, engaging Christian pastor and exegetical scholar. "
-        "Your task is to write a compelling sermon title and complete 10-15 minute spoken sermon script."
+        "Your task is to write a compelling sermon title and complete 15-20 minute spoken sermon script."
     )
     
     user_prompt = f"""
-Write a full, engaging spoken sermon on the passage '{passage_ref}'.
+Write a full, deeply engaging spoken sermon on the passage '{passage_ref}'.
 
-Structure:
-0. Title: On the VERY FIRST line of your response, write a creative, engaging sermon title (3-7 words) in the exact format: TITLE: Your Sermon Title Here
-1. Opening Hook: Start immediately after the title line with an engaging real-world story, historical anecdote, or modern analogy that illustrates the central theme.
-2. Exegesis & Context: Walk through '{passage_ref}', explaining original historical background, focusing on original languages (Hebrew/Aramaic and the Greek Septuagint) and key theological themes clearly.
-3. Practical Application: Give two concrete, modern daily life applications for believers today.
-4. Closing: End with a memorable reflection or closing prayer.
+CRITICAL LENGTH REQUIREMENT:
+Your sermon script MUST be between 2,200 and 2,800 words long to support a 15 to 20-minute spoken audio study. Do NOT summarize or shorten any section.
+
+Structure & Minimum Lengths:
+0. Title: On the VERY FIRST line of your response, write: TITLE: Your Sermon Title Here
+1. Opening Hook (350+ words): An engaging real-world story, an applicable animal fact/story, historical anecdote, or modern analogy illustrating the central theme.
+2. Exegesis & Historical Context (1,100+ words): Walk verse-by-verse through '{passage_ref}'. Explain original Hebrew/Greek word meanings, cultural background, and theological themes in deep detail. Focus on original languages and how the translation affects our understanding of the verses.
+3. Practical Application (650+ words): Provide two concrete, highly detailed real-world scenarios for modern believers today.
+4. Concluding Reflection (300+ words): A memorable closing takeaway and personal prayer.
 
 Formatting Rules for Text-to-Speech (TTS):
 - Write numbers as words (e.g., 'three' instead of '3', 'chapter four' instead of 'ch. 4').
 - Do NOT use markdown headers (no ##), bullet points (* or -), or bold markers (**text**). Write purely spoken prose.
-- Target roughly 1,200 to 1,500 words.
 """
-
+    
     print(f"--> [Pass 1] Generating sermon draft & title via OpenRouter ({PRIMARY_MODEL})...")
     response = client.chat.completions.create(
         model=PRIMARY_MODEL,
