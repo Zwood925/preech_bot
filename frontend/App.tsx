@@ -17,7 +17,7 @@ import {
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system'; // FIXED: removed /legacy
 import {
   Canvas,
   Circle,
@@ -61,16 +61,22 @@ import {
   PlusJakartaSans_500Medium,
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
-import { supabase } from './supabase';
 
 import * as SplashScreen from 'expo-splash-screen';
 SplashScreen.preventAutoHideAsync();
+
+// FIXED: Initializing Supabase directly so it doesn't crash looking for a missing file
+import { createClient } from '@supabase/supabase-js';
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'placeholder';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SPEED_OPTIONS = [1.0, 1.25, 1.5, 2.0, 0.8];
 const OPENROUTER_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
 
 const WAVEFORM_BARS = [
+  
   0.3, 0.5, 0.8, 0.4, 0.9, 0.6, 0.3, 0.7, 1.0, 0.5, 0.8, 0.3, 0.6, 0.9, 0.4, 0.7,
   0.5, 0.8, 0.3, 0.6, 1.0, 0.7, 0.4, 0.9, 0.5, 0.8, 0.3, 0.6, 0.9, 0.4, 0.7, 0.5,
   0.8, 0.3, 0.6, 1.0, 0.7, 0.4, 0.9, 0.5,
