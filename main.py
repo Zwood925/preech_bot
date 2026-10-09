@@ -2,7 +2,7 @@
 Preech Bot - Main Engine Runner
 ===============================
 Walks sequentially through scripture, generates full sermon scripts via OpenRouter,
-renders full-length chunked audio via Kokoro ONNX, and logs results to SQLite.
+renders full-length chunked audio via Kokoro ONNX, and logs results to Supabase.
 """
 
 import os
@@ -25,11 +25,11 @@ DEFAULT_CHUNK_SIZE = 10  # verses per sermon
 
 
 def get_next_passage(db: SermonLog) -> tuple:
-    """Determine next passage to preach on, starting at Genesis 10:1."""
+    """Determine next passage to preach on."""
     last = db.get_last_progression()
 
     if not last:
-        return "Genesis", 10, 1
+        return "Genesis", 1, 1
 
     book, chapter, last_end_verse = last
     max_verse = GENESIS_VERSE_COUNTS.get(chapter, 30)
@@ -54,7 +54,7 @@ def generate_sermon(passage_ref: str, book: str, chapter: int, start_v: int, end
     print(f"  --> Generating complete sermon for: {passage_ref}")
     print(f"{'='*60}")
 
-# Step 1: OpenRouter Script Generation
+    # Step 1: OpenRouter Script Generation
     title, sermon_text = generate_full_sermon_script(passage_ref)
     word_count = len(sermon_text.split())
 
@@ -95,24 +95,46 @@ def generate_sermon(passage_ref: str, book: str, chapter: int, start_v: int, end
 def run_single(passage_ref: str):
     """Generates a single sermon for testing."""
     db = SermonLog()
-    match = re.match(r"(\w+)\s+(\d+):(\d+)-(\d+)", passage_ref)
+    match = re.match(r"([\w\s]+)\s+(\d+):(\d+)-(\d+)", passage_ref)
     if not match:
         print(f"Invalid reference format: {passage_ref}. Use 'Genesis 11:1-9'")
         return
 
     book, chapter, start_v, end_v = match.groups()
-    result = generate_sermon(passage_ref, book, int(chapter), int(start_v), int(end_v), db)
+    result = generate_sermon(passage_ref, book.strip(), int(chapter), int(start_v), int(end_v), db)
     print(f"\n[Success] Processed sermon #{result['id']}: {result['passage']} ({result['words']} words)")
     print(f"Audio file saved to: {result['audio']}")
+
+
+def run_auto(count: int = 1):
+    """Automatically determines progress and generates the next N sermons."""
+    db = SermonLog()
+    for i in range(count):
+        next_pass = get_next_passage(db)
+        if not next_pass:
+            print("[Auto Progression] Completed all available scripture chapters!")
+            break
+
+        book, chapter, start_v = next_pass
+        max_v = GENESIS_VERSE_COUNTS.get(chapter, 30)
+        end_v = min(start_v + DEFAULT_CHUNK_SIZE - 1, max_v)
+        passage_ref = get_passage_ref(book, chapter, start_v, end_v)
+
+        result = generate_sermon(passage_ref, book, chapter, start_v, end_v, db)
+        print(f"\n[Auto Success] Processed sermon #{result['id']}: {result['passage']} ({result['words']} words)")
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Preech Bot Engine")
     parser.add_argument("--single", type=str, help="Generate a single sermon (e.g. 'Genesis 11:1-9')")
+    parser.add_argument("--auto", type=int, nargs="?", const=1, help="Automatically process next N sermons (default: 1)")
+
     args = parser.parse_args()
 
     if args.single:
         run_single(args.single)
+    elif args.auto is not None:
+        run_auto(args.auto)
     else:
-        print("Usage: python3 main.py --single 'Genesis 11:1-9'")
+        parser.print_help()
