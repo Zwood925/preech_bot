@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -18,23 +17,26 @@ import {
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   Canvas,
   Circle,
   Blur,
   RadialGradient,
-  Rect,
   vec,
 } from '@shopify/react-native-skia';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withRepeat,
   withTiming,
   Easing,
-  interpolateColor,
 } from 'react-native-reanimated';
 import {
+  Home,
+  Headphones,
+  BookOpen,
   Play,
   Pause,
   RotateCcw,
@@ -42,11 +44,17 @@ import {
   Bookmark,
   MessageSquare,
   Search,
-  BookOpen,
-  Headphones,
   Sparkles,
+  Calendar,
   Share2,
+  Quote,
+  Download,
+  CheckCircle2,
+  X,
+  ChevronRight,
 } from 'lucide-react-native';
+import ViewShot, { captureRef } from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 import { useFonts, Cinzel_700Bold, Cinzel_900Black } from '@expo-google-fonts/cinzel';
 import {
   PlusJakartaSans_500Medium,
@@ -54,11 +62,10 @@ import {
 } from '@expo-google-fonts/plus-jakarta-sans';
 import { supabase } from './supabase';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SPEED_OPTIONS = [1.0, 1.25, 1.5, 2.0, 0.8];
 const OPENROUTER_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
 
-// Mock waveform heights for the visualizer
 const WAVEFORM_BARS = [
   0.3, 0.5, 0.8, 0.4, 0.9, 0.6, 0.3, 0.7, 1.0, 0.5, 0.8, 0.3, 0.6, 0.9, 0.4, 0.7,
   0.5, 0.8, 0.3, 0.6, 1.0, 0.7, 0.4, 0.9, 0.5, 0.8, 0.3, 0.6, 0.9, 0.4, 0.7, 0.5,
@@ -96,7 +103,7 @@ export default function App() {
     PlusJakartaSans_700Bold,
   });
 
-  const [activeTab, setActiveTab] = useState<'player' | 'library'>('player');
+  const [activeTab, setActiveTab] = useState<'home' | 'player' | 'library'>('home');
   const [sermons, setSermons] = useState<Sermon[]>([]);
   const [currentSermon, setCurrentSermon] = useState<Sermon | null>(null);
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([]);
@@ -106,6 +113,10 @@ export default function App() {
   const [isVectorSearching, setIsVectorSearching] = useState<boolean>(false);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [speedIndex, setSpeedIndex] = useState<number>(0);
+
+  // Offline Download State
+  const [downloadedSermonIds, setDownloadedSermonIds] = useState<number[]>([]);
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
 
   // Bookmark Modal
   const [bookmarkModalVisible, setBookmarkModalVisible] = useState<boolean>(false);
@@ -118,26 +129,35 @@ export default function App() {
   const [chatInput, setChatInput] = useState<string>('');
   const [isChatLoading, setIsChatLoading] = useState<boolean>(false);
 
+  // Social Share Card Modal
+  const [shareModalVisible, setShareModalVisible] = useState<boolean>(false);
+  const [selectedQuote, setSelectedQuote] = useState<string>('');
+  const cardViewShotRef = useRef<any>(null);
+
   const player = useAudioPlayer(audioUrl);
   const status = useAudioPlayerStatus(player);
 
-  // Reanimated Shared Values for Fluid Background
-  const animX = useSharedValue(SCREEN_WIDTH * 0.3);
-  const animY = useSharedValue(180);
+  const badgePulse = useSharedValue(1);
+  const documentDir = (FileSystem as any).documentDirectory || '';
 
   useEffect(() => {
-    animX.value = withRepeat(
-      withTiming(SCREEN_WIDTH * 0.7, { duration: 6000, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true
-    );
-    animY.value = withRepeat(
-      withTiming(260, { duration: 8000, easing: Easing.inOut(Easing.ease) }),
+    badgePulse.value = withRepeat(
+      withTiming(1.2, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
       -1,
       true
     );
     fetchAllSermons();
   }, []);
+
+  useEffect(() => {
+    if (currentSermon) {
+      checkIfDownloaded(currentSermon.id);
+    }
+  }, [currentSermon]);
+
+  const badgeAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: badgePulse.value }],
+  }));
 
   async function fetchAllSermons() {
     try {
@@ -177,6 +197,40 @@ export default function App() {
           console.warn('Audio swap deferred:', err);
         }
       }
+    }
+  }
+
+  function playFromHome(sermon: Sermon) {
+    selectSermon(sermon, true);
+    setActiveTab('player');
+  }
+
+  async function checkIfDownloaded(sermonId: number) {
+    const localUri = `${documentDir}sermon_${sermonId}.mp3`;
+    const info = await FileSystem.getInfoAsync(localUri);
+    if (info.exists && !downloadedSermonIds.includes(sermonId)) {
+      setDownloadedSermonIds((prev) => [...prev, sermonId]);
+    }
+  }
+
+  async function downloadSermonForOffline(sermon: Sermon) {
+    if (!sermon.audio_url) return;
+    const localUri = `${documentDir}sermon_${sermon.id}.mp3`;
+    
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setIsDownloading(true);
+
+    try {
+      const downloadRes = await FileSystem.downloadAsync(sermon.audio_url, localUri);
+      if (downloadRes.status === 200) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setDownloadedSermonIds((prev) => [...prev, sermon.id]);
+        setAudioUrl(localUri);
+      }
+    } catch (err) {
+      console.error('Offline download failed:', err);
+    } finally {
+      setIsDownloading(false);
     }
   }
 
@@ -242,6 +296,27 @@ export default function App() {
       setBookmarks([...bookmarks, data[0]].sort((a, b) => a.timestamp_seconds - b.timestamp_seconds));
     }
     setBookmarkModalVisible(false);
+  }
+
+  function openShareModal(quoteText: string) {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSelectedQuote(quoteText);
+    setShareModalVisible(true);
+  }
+
+  async function exportAndShareCard() {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (cardViewShotRef.current) {
+        const uri = await captureRef(cardViewShotRef, {
+          format: 'png',
+          quality: 1,
+        });
+        await Sharing.shareAsync(uri);
+      }
+    } catch (err) {
+      console.error('Failed to capture or share quote card:', err);
+    }
   }
 
   async function performVectorSearch() {
@@ -338,6 +413,12 @@ export default function App() {
   const duration = status.duration || 1;
   const progressPercent = Math.min(1, Math.max(0, currentPos / duration));
 
+  const paragraphs = currentSermon?.sermon_text.split('\n\n') || [];
+  const activeParagraphIndex = Math.min(
+    paragraphs.length - 1,
+    Math.floor(progressPercent * paragraphs.length)
+  );
+
   if (loading || !fontsLoaded) {
     return (
       <View style={styles.center}>
@@ -349,7 +430,7 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      {/* Living Skia GPU Liquid Aurora Background */}
+      {/* Background Liquid Aura */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <Canvas style={{ flex: 1 }}>
           <Circle cx={SCREEN_WIDTH * 0.5} cy={200} r={220}>
@@ -367,43 +448,135 @@ export default function App() {
         </Canvas>
       </View>
 
-      {/* Large Background Watermark for Visual Depth */}
+      {/* Background Watermark */}
       <View style={styles.watermarkWrapper} pointerEvents="none">
         <Text style={styles.watermarkText}>
           {currentSermon?.book.toUpperCase() || 'PREECH'}
         </Text>
       </View>
 
-      {activeTab === 'player' ? (
+      {/* 1. HOME TAB */}
+      {activeTab === 'home' && (
         <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
-          {/* Header */}
           <View style={styles.topHeader}>
-            <View style={styles.badgeCapsule}>
-              <Sparkles size={12} color="#A5B4FC" />
-              <Text style={styles.badgeText}>{currentSermon?.passage_ref || 'Scripture'}</Text>
+            <View style={styles.headerPillRow}>
+              <Text style={styles.editorialSubHeader}>PREECH BOT</Text>
+              <View style={styles.dailyBadgeWrapper}>
+                <Animated.View style={[styles.pulseDot, badgeAnimatedStyle]} />
+                <Text style={styles.dailyBadgeText}>UPDATED TODAY</Text>
+              </View>
             </View>
+            <Text style={styles.serifHeroTitle}>Daily Edition</Text>
+          </View>
+
+          {/* Today's Featured Study Hero */}
+          {currentSermon && (
+            <View style={styles.homeHeroCardContainer}>
+              <LinearGradient
+                style={StyleSheet.absoluteFill}
+                colors={['#312E81', '#1E1B4B', '#0F172A']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              />
+              <View style={styles.homeHeroInner}>
+                <View style={styles.homeHeroBadgeRow}>
+                  <View style={styles.badgeCapsule}>
+                    <Sparkles size={12} color="#A5B4FC" />
+                    <Text style={styles.badgeText}>{currentSermon.passage_ref}</Text>
+                  </View>
+                  <Text style={styles.homeHeroIssueText}>STUDY #{currentSermon.id}</Text>
+                </View>
+
+                <Text style={styles.homeHeroTitle}>{currentSermon.title}</Text>
+                <Text style={styles.homeHeroSubtitle}>
+                  EXEGETICAL COMMENTARY & AUDIO REFLECTION
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.homePlayCTA}
+                  onPress={() => playFromHome(currentSermon)}
+                >
+                  <Play size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />
+                  <Text style={styles.homePlayCTAText}>Play Today's Study</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Recent Daily Broadcasts Feed */}
+          <View style={styles.sectionContainer}>
+            <Text style={styles.sectionHeaderLabel}>Recent Daily Broadcasts</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {sermons.slice(0, 8).map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.recentIssueCard}
+                  onPress={() => playFromHome(item)}
+                >
+                  <BlurView intensity={35} tint="dark" style={styles.recentIssueInner}>
+                    <Text style={styles.recentIssuePassage}>{item.passage_ref}</Text>
+                    <Text style={styles.recentIssueTitle} numberOfLines={2}>
+                      {item.title}
+                    </Text>
+                    <View style={styles.recentIssueFooter}>
+                      <Text style={styles.recentIssueAction}>Listen</Text>
+                      <ChevronRight size={14} color="#818CF8" />
+                    </View>
+                  </BlurView>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </ScrollView>
+      )}
+
+      {/* 2. PLAYER TAB */}
+      {activeTab === 'player' && (
+        <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
+          <View style={styles.topHeader}>
+            <View style={styles.headerPillRow}>
+              <View style={styles.badgeCapsule}>
+                <Sparkles size={12} color="#A5B4FC" />
+                <Text style={styles.badgeText}>{currentSermon?.passage_ref || 'Scripture'}</Text>
+              </View>
+
+              <View style={styles.dailyBadgeWrapper}>
+                <Animated.View style={[styles.pulseDot, badgeAnimatedStyle]} />
+                <Text style={styles.dailyBadgeText}>NEW STUDIES DAILY</Text>
+              </View>
+            </View>
+
             <Text style={styles.serifHeroTitle}>{currentSermon?.title || 'No Sermon Selected'}</Text>
           </View>
 
-          {/* Artistic Scripture Visual Cover Art Card */}
-          <View style={styles.artCardContainer}>
+          {/* Magazine Hero Header */}
+          <View style={styles.magazineHeroContainer}>
             <LinearGradient
               style={StyleSheet.absoluteFill}
-              colors={['#4F46E5', '#06B6D4', '#0F172A']}
+              colors={['#312E81', '#1E1B4B', '#0F172A']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
             />
-            <BlurView intensity={20} tint="dark" style={styles.artCardGlass}>
-              <Text style={styles.artCardChapterText}>
-                {currentSermon?.book} {currentSermon?.chapter ? `Chapter ${currentSermon.chapter}` : ''}
+            <View style={styles.magazineHeroInner}>
+              <View style={styles.magazineTopBar}>
+                <Text style={styles.magazineIssueLabel}>
+                  STUDY #{currentSermon?.id || '01'}
+                </Text>
+                <View style={styles.magazineDateTag}>
+                  <Calendar size={11} color="#94A3B8" />
+                  <Text style={styles.magazineDateText}>DAILY EXEGESIS</Text>
+                </View>
+              </View>
+
+              <Text style={styles.magazineCoverTitle}>{currentSermon?.book} Study</Text>
+              <Text style={styles.magazineCoverSubtext}>
+                Spoken Exegetical Commentary & Reflection
               </Text>
-              <Text style={styles.artCardSubtext}>AUDIO EXEGETICAL STUDY</Text>
-            </BlurView>
+            </View>
           </View>
 
-          {/* Frosted Audio Player Card */}
+          {/* Player Card */}
           <BlurView intensity={45} tint="dark" style={styles.glassPlayerCard}>
-            {/* Custom Interactive Skia Waveform Scrubber */}
             <TouchableOpacity
               activeOpacity={0.9}
               style={styles.waveformContainer}
@@ -440,7 +613,6 @@ export default function App() {
               <Text style={styles.timeText}>-{formatTime(Math.max(0, duration - currentPos))}</Text>
             </View>
 
-            {/* Transport Controls */}
             <View style={styles.controlsRow}>
               <TouchableOpacity style={styles.speedCapsule} onPress={cycleSpeed}>
                 <Text style={styles.speedText}>{SPEED_OPTIONS[speedIndex]}x</Text>
@@ -463,15 +635,42 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* Secondary Action Row */}
             <View style={styles.actionRow}>
               <TouchableOpacity style={styles.glassActionPill} onPress={openBookmarkModal}>
-                <Bookmark size={15} color="#818CF8" />
+                <Bookmark size={14} color="#818CF8" />
                 <Text style={styles.actionPillText}>Bookmark</Text>
               </TouchableOpacity>
 
+              <TouchableOpacity
+                style={styles.glassActionPill}
+                onPress={() => currentSermon && downloadSermonForOffline(currentSermon)}
+                disabled={isDownloading || (currentSermon ? downloadedSermonIds.includes(currentSermon.id) : false)}
+              >
+                {isDownloading ? (
+                  <ActivityIndicator size="small" color="#818CF8" />
+                ) : currentSermon && downloadedSermonIds.includes(currentSermon.id) ? (
+                  <>
+                    <CheckCircle2 size={14} color="#22C55E" />
+                    <Text style={[styles.actionPillText, { color: '#4ADE80' }]}>Saved</Text>
+                  </>
+                ) : (
+                  <>
+                    <Download size={14} color="#818CF8" />
+                    <Text style={styles.actionPillText}>Offline</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.glassActionPill}
+                onPress={() => openShareModal(paragraphs[activeParagraphIndex] || currentSermon?.title || '')}
+              >
+                <Share2 size={14} color="#818CF8" />
+                <Text style={styles.actionPillText}>Share</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity style={styles.highlightActionPill} onPress={() => setChatVisible(true)}>
-                <MessageSquare size={15} color="#FFFFFF" />
+                <MessageSquare size={14} color="#FFFFFF" />
                 <Text style={styles.highlightPillText}>Ask Pastor</Text>
               </TouchableOpacity>
             </View>
@@ -490,6 +689,7 @@ export default function App() {
                       Haptics.selectionAsync();
                       player.seekTo(bm.timestamp_seconds);
                     }}
+                    onLongPress={() => openShareModal(bm.note)}
                   >
                     <Text style={styles.chipTime}>{formatTime(bm.timestamp_seconds)}</Text>
                     <Text style={styles.chipNote} numberOfLines={1}>
@@ -501,20 +701,41 @@ export default function App() {
             </View>
           )}
 
-          {/* Transcript Reader */}
+          {/* Interactive Transcript */}
           <View style={styles.transcriptContainer}>
-            <Text style={styles.sectionHeaderLabel}>Sermon Transcript</Text>
-            <Text style={styles.transcriptBodyText}>
-              {currentSermon?.sermon_text || 'Select a sermon from the library.'}
-            </Text>
+            <Text style={styles.sectionHeaderLabel}>Interactive Transcript</Text>
+            {paragraphs.map((pText, pIdx) => {
+              const isCurrent = pIdx === activeParagraphIndex && player.playing;
+              return (
+                <TouchableOpacity
+                  key={pIdx}
+                  activeOpacity={0.8}
+                  style={[
+                    styles.paragraphBlock,
+                    isCurrent && styles.activeParagraphBlock,
+                  ]}
+                  onLongPress={() => openShareModal(pText)}
+                >
+                  <Text
+                    style={[
+                      styles.transcriptBodyText,
+                      isCurrent && styles.activeTranscriptText,
+                    ]}
+                  >
+                    {pText}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </ScrollView>
-      ) : (
-        /* Library View */
+      )}
+
+      {/* 3. LIBRARY TAB */}
+      {activeTab === 'library' && (
         <View style={styles.libraryContainer}>
           <Text style={styles.serifLibraryTitle}>Sermon Library</Text>
 
-          {/* AI Vector Search Input */}
           <View style={styles.searchBarRow}>
             <TextInput
               style={styles.searchBarFlex}
@@ -553,7 +774,7 @@ export default function App() {
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.cardTouchWrapper}
-                  onPress={() => selectSermon(item, true)}
+                  onPress={() => playFromHome(item)}
                 >
                   <BlurView
                     intensity={isSelected ? 50 : 25}
@@ -586,10 +807,21 @@ export default function App() {
         </View>
       )}
 
-      {/* Floating Bottom Nav */}
+      {/* Floating 3-Tab Nav */}
       <BlurView intensity={60} tint="dark" style={styles.floatingNavGlass}>
         <TouchableOpacity
-          style={[styles.navTab, activeTab === 'player' && styles.navTabActive]}
+          style={styles.navTab}
+          onPress={() => {
+            Haptics.selectionAsync();
+            setActiveTab('home');
+          }}
+        >
+          <Home size={20} color={activeTab === 'home' ? '#818CF8' : '#64748B'} />
+          <Text style={[styles.navText, activeTab === 'home' && styles.navTextActive]}>Home</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.navTab}
           onPress={() => {
             Haptics.selectionAsync();
             setActiveTab('player');
@@ -600,7 +832,7 @@ export default function App() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.navTab, activeTab === 'library' && styles.navTabActive]}
+          style={styles.navTab}
           onPress={() => {
             Haptics.selectionAsync();
             setActiveTab('library');
@@ -632,6 +864,55 @@ export default function App() {
               </TouchableOpacity>
               <TouchableOpacity style={styles.saveBtn} onPress={saveBookmark}>
                 <Text style={styles.saveBtnText}>Save Bookmark</Text>
+              </TouchableOpacity>
+            </View>
+          </BlurView>
+        </View>
+      </Modal>
+
+      {/* Social Quote Share Card Modal */}
+      <Modal visible={shareModalVisible} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={85} tint="dark" style={styles.shareModalContent}>
+            <View style={styles.shareHeaderRow}>
+              <Text style={styles.modalTitleText}>Share Story Card</Text>
+              <TouchableOpacity style={styles.closeIconBtn} onPress={() => setShareModalVisible(false)}>
+                <X size={20} color="#94A3B8" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.shareScrollView} showsVerticalScrollIndicator={false}>
+              <ViewShot ref={cardViewShotRef} options={{ format: 'png', quality: 1.0 }}>
+                <View style={styles.exportableCardContainer}>
+                  <LinearGradient
+                    style={StyleSheet.absoluteFill}
+                    colors={['#1E1B4B', '#312E81', '#0F172A']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                  />
+                  <View style={styles.exportableCardHeader}>
+                    <Sparkles size={14} color="#818CF8" />
+                    <Text style={styles.exportableBrandText}>PREECH BOT • DAILY EXEGETICAL STUDY</Text>
+                  </View>
+
+                  <Quote size={24} color="rgba(129, 140, 248, 0.4)" style={{ marginBottom: 8 }} />
+                  <Text style={styles.exportableQuoteText}>"{selectedQuote}"</Text>
+
+                  <View style={styles.exportableCardFooter}>
+                    <Text style={styles.exportableRefText}>{currentSermon?.passage_ref}</Text>
+                    <Text style={styles.exportableTitleText}>{currentSermon?.title}</Text>
+                  </View>
+                </View>
+              </ViewShot>
+            </ScrollView>
+
+            <View style={styles.modalBtnRow}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setShareModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>Close</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.shareExportBtn} onPress={exportAndShareCard}>
+                <Share2 size={16} color="#FFFFFF" />
+                <Text style={styles.shareExportBtnText}>Export & Share</Text>
               </TouchableOpacity>
             </View>
           </BlurView>
@@ -710,34 +991,60 @@ const styles = StyleSheet.create({
   watermarkText: { color: '#FFFFFF', fontSize: 72, fontFamily: 'Cinzel_900Black', letterSpacing: -2 },
 
   topHeader: { marginBottom: 16 },
+  headerPillRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  editorialSubHeader: { color: '#818CF8', fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 1.5 },
   badgeCapsule: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    alignSelf: 'flex-start',
     backgroundColor: 'rgba(99, 102, 241, 0.15)',
     paddingVertical: 5,
     paddingHorizontal: 12,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(129, 140, 248, 0.3)',
-    marginBottom: 8,
   },
   badgeText: { color: '#C7D2FE', fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 0.8, textTransform: 'uppercase' },
-  serifHeroTitle: { color: '#F8FAFC', fontSize: 25, fontFamily: 'Cinzel_700Bold', lineHeight: 33 },
 
-  artCardContainer: {
-    height: 140,
+  dailyBadgeWrapper: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(34, 197, 94, 0.12)', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(34, 197, 94, 0.3)' },
+  pulseDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#22C55E' },
+  dailyBadgeText: { color: '#4ADE80', fontSize: 10, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 0.8 },
+
+  serifHeroTitle: { color: '#F8FAFC', fontSize: 28, fontFamily: 'Cinzel_700Bold', lineHeight: 34 },
+
+  // Home Front Page Styles
+  homeHeroCardContainer: { borderRadius: 24, overflow: 'hidden', marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
+  homeHeroInner: { padding: 22 },
+  homeHeroBadgeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  homeHeroIssueText: { color: '#94A3B8', fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 1 },
+  homeHeroTitle: { color: '#FFFFFF', fontSize: 24, fontFamily: 'Cinzel_700Bold', lineHeight: 32, marginBottom: 6 },
+  homeHeroSubtitle: { color: '#CBD5E1', fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 1, marginBottom: 18 },
+  homePlayCTA: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#4F46E5', paddingVertical: 14, borderRadius: 16 },
+  homePlayCTAText: { color: '#FFFFFF', fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold' },
+
+  recentIssueCard: { width: 170, marginRight: 12, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)' },
+  recentIssueInner: { padding: 14, minHeight: 115, justifyContent: 'space-between', backgroundColor: 'rgba(30, 41, 59, 0.4)' },
+  recentIssuePassage: { color: '#A5B4FC', fontSize: 10, fontFamily: 'PlusJakartaSans_700Bold', textTransform: 'uppercase' },
+  recentIssueTitle: { color: '#F8FAFC', fontSize: 14, fontFamily: 'Cinzel_700Bold', marginVertical: 4 },
+  recentIssueFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+  recentIssueAction: { color: '#818CF8', fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold' },
+
+  // Player Styles
+  magazineHeroContainer: {
+    height: 125,
     borderRadius: 22,
     overflow: 'hidden',
     marginBottom: 16,
-    justifyContent: 'flex-end',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  artCardGlass: { padding: 16, backgroundColor: 'rgba(15, 23, 42, 0.4)' },
-  artCardChapterText: { color: '#FFFFFF', fontSize: 22, fontFamily: 'Cinzel_700Bold' },
-  artCardSubtext: { color: '#94A3B8', fontSize: 10, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 1.5, marginTop: 2 },
+  magazineHeroInner: { flex: 1, padding: 16, justifyContent: 'space-between' },
+  magazineTopBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  magazineIssueLabel: { color: '#818CF8', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11, letterSpacing: 1.5 },
+  magazineDateTag: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  magazineDateText: { color: '#94A3B8', fontSize: 10, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 1 },
+  magazineCoverTitle: { color: '#FFFFFF', fontSize: 22, fontFamily: 'Cinzel_700Bold' },
+  magazineCoverSubtext: { color: '#CBD5E1', fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium' },
 
   glassPlayerCard: {
     backgroundColor: 'rgba(30, 41, 59, 0.45)',
@@ -759,11 +1066,11 @@ const styles = StyleSheet.create({
   iconCircleBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(51, 65, 85, 0.5)', justifyContent: 'center', alignItems: 'center' },
   glowingPlayBtn: { width: 62, height: 62, borderRadius: 31, backgroundColor: '#4F46E5', justifyContent: 'center', alignItems: 'center' },
 
-  actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.06)' },
-  glassActionPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(51, 65, 85, 0.4)', paddingVertical: 10, borderRadius: 12 },
-  actionPillText: { color: '#C7D2FE', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
-  highlightActionPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#4338CA', paddingVertical: 10, borderRadius: 12 },
-  highlightPillText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.06)' },
+  glassActionPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: 'rgba(51, 65, 85, 0.4)', paddingVertical: 10, borderRadius: 12 },
+  actionPillText: { color: '#C7D2FE', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11 },
+  highlightActionPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: '#4338CA', paddingVertical: 10, borderRadius: 12 },
+  highlightPillText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11 },
 
   sectionContainer: { marginBottom: 20 },
   sectionHeaderLabel: { color: '#94A3B8', fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 },
@@ -772,8 +1079,12 @@ const styles = StyleSheet.create({
   chipNote: { color: '#E2E8F0', fontSize: 12, marginTop: 2, fontFamily: 'PlusJakartaSans_500Medium' },
 
   transcriptContainer: { backgroundColor: 'rgba(30, 41, 59, 0.4)', borderRadius: 24, padding: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)', marginBottom: 100 },
+  paragraphBlock: { padding: 10, borderRadius: 12, marginBottom: 8 },
+  activeParagraphBlock: { backgroundColor: 'rgba(99, 102, 241, 0.15)', borderWidth: 1, borderColor: 'rgba(129, 140, 248, 0.3)' },
   transcriptBodyText: { color: '#CBD5E1', fontSize: 16, lineHeight: 28, fontFamily: 'PlusJakartaSans_500Medium' },
+  activeTranscriptText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold' },
 
+  // Library Styles
   libraryContainer: { flex: 1, paddingHorizontal: 20 },
   serifLibraryTitle: { color: '#F8FAFC', fontSize: 28, fontFamily: 'Cinzel_700Bold', marginBottom: 16 },
   searchBarRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
@@ -791,12 +1102,13 @@ const styles = StyleSheet.create({
   serifCardTitle: { color: '#F8FAFC', fontSize: 18, fontFamily: 'Cinzel_700Bold', marginBottom: 6 },
   cardSnippetText: { color: '#94A3B8', fontSize: 13, lineHeight: 19, fontFamily: 'PlusJakartaSans_500Medium' },
 
+  // Navigation Bar
   floatingNavGlass: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', backgroundColor: 'rgba(7, 10, 18, 0.8)', paddingBottom: 28, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.08)' },
   navTab: { flex: 1, alignItems: 'center', gap: 4 },
-  navTabActive: {},
   navText: { color: '#64748B', fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium' },
   navTextActive: { color: '#F8FAFC', fontFamily: 'PlusJakartaSans_700Bold' },
 
+  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   modalGlassBox: { width: '100%', backgroundColor: 'rgba(30, 41, 59, 0.85)', borderRadius: 24, padding: 24, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   modalTitleText: { color: '#F8FAFC', fontSize: 18, fontFamily: 'Cinzel_700Bold', marginBottom: 14 },
@@ -807,6 +1119,89 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: '#4F46E5', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 },
   saveBtnText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold' },
 
+  // Share Card Modal Styles
+  shareModalContent: {
+    width: '100%',
+    maxHeight: SCREEN_HEIGHT * 0.85,
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    borderRadius: 28,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  shareHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  closeIconBtn: {
+    padding: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
+  },
+  shareScrollView: {
+    flexGrow: 0,
+    marginVertical: 6,
+  },
+  exportableCardContainer: {
+    borderRadius: 20,
+    padding: 20,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  exportableCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 14,
+  },
+  exportableBrandText: {
+    color: '#818CF8',
+    fontSize: 9,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    letterSpacing: 1,
+  },
+  exportableQuoteText: {
+    color: '#F8FAFC',
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    lineHeight: 24,
+    marginBottom: 16,
+  },
+  exportableCardFooter: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    paddingTop: 10,
+  },
+  exportableRefText: {
+    color: '#C7D2FE',
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    textTransform: 'uppercase',
+  },
+  exportableTitleText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    marginTop: 2,
+  },
+  shareExportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#4F46E5',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+  },
+  shareExportBtnText: {
+    color: '#FFFFFF',
+    fontFamily: 'PlusJakartaSans_700Bold',
+  },
+
+  // Ask Pastor Chat Drawer Styles
   chatModalGlass: { width: '100%', height: '82%', backgroundColor: 'rgba(30, 41, 59, 0.9)', borderRadius: 28, padding: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   chatHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255, 255, 255, 0.08)' },
   chatTitleText: { color: '#F8FAFC', fontSize: 18, fontFamily: 'Cinzel_700Bold' },
