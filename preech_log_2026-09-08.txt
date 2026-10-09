@@ -1,9 +1,0 @@
-
-======================================================================
-PREECH BOT NIGHTLY RUN - 2026-09-08 02:00:03
-======================================================================
-  [1/4] Genesis 22:11-20 | 617 words | Audio: ./audio/Genesis_22_11-20.mp3 | Tags: ['family', 'faith', 'promises', 'covenant', 'Providence', 'judgment', 'sin', 'Genesis', 'Abraham', 'leadership']
-  [2/4] Genesis 23:1-10 | 759 words | Audio: ./audio/Genesis_23_1-10.mp3 | Tags: ['family', 'faith', 'covenant', 'worship', 'sin', 'creation', 'Genesis', 'Abraham', 'leadership']
-  [3/4] Genesis 23:11-20 | 600 words | Audio: ./audio/Genesis_23_11-20.mp3 | Tags: ['family', 'faith', 'promises', 'covenant', 'Providence', 'worship', 'sin', 'Genesis', 'Abraham', 'leadership']
-  [4/4] Genesis 24:1-10 | 759 words | Audio: ./audio/Genesis_24_1-10.mp3 | Tags: ['family', 'faith', 'promises', 'covenant', 'Providence', 'sin', 'creation', 'Genesis', 'Abraham', 'leadership']
-Total sermons generated: 4

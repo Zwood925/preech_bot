@@ -3,3 +3,7 @@ crewai
 ollama
 kokoro-onnx
 boto3
+soundfile
+openai
+python-dotenv
+supabase

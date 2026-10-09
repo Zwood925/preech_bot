@@ -1,8 +1,0 @@
-
-======================================================================
-PREECH BOT NIGHTLY RUN - 2026-09-01 20:05:31
-======================================================================
-  [1/3] Genesis 10:1-10 | 654 words | Audio: N/A | Tags: ['sin', 'Providence', 'faith', 'creation', 'family', 'Genesis', 'promises', 'covenant', 'Patriarchs-Early', 'judgment', 'leadership']
-  [2/3] Genesis 10:11-20 | 446 words | Audio: N/A | Tags: ['sin', 'faith', 'worship', 'creation', 'family', 'Genesis', 'promises', 'covenant', 'Patriarchs-Early', 'judgment', 'leadership']
-  [3/3] Genesis 10:21-30 | 600 words | Audio: N/A | Tags: ['sin', 'Providence', 'faith', 'family', 'Genesis', 'promises', 'covenant', 'Patriarchs-Early', 'leadership']
-Total sermons generated: 3

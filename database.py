@@ -1,97 +1,128 @@
-import sqlite3
-from datetime import datetime
-from typing import Optional, List, Tuple, Any
+"""
+Supabase Database & Storage Client for Preech Bot.
+Handles scripture progression tracking, sermon log creation,
+MP3 audio file uploads to Supabase Storage, and vector embedding generation.
+"""
+
+import os
+from openai import OpenAI
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env file.")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+openrouter_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+AUDIO_BUCKET = "sermon-audio"
+
+
+def generate_embedding(text: str) -> list[float]:
+    """Generates a 1536-dim vector embedding using OpenRouter."""
+    if not OPENROUTER_API_KEY:
+        print("[Embedding Warning] OPENROUTER_API_KEY missing, skipping embedding generation.")
+        return []
+
+    try:
+        response = openrouter_client.embeddings.create(
+            model="openai/text-embedding-3-small",
+            input=text[:8000]  # Cap context length for embedding
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        print(f"[Embedding Error] Failed to generate vector: {e}")
+        return []
+
 
 class SermonLog:
-    def __init__(self, db_name="preech.db"):
-        self.conn = sqlite3.connect(db_name)
-        self.conn.row_factory = sqlite3.Row
-        self.create_table()
+    def __init__(self):
+        self.client = supabase
 
-    def create_table(self):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sermons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                book TEXT,
-                chapter INTEGER,
-                start_verse INTEGER,
-                end_verse INTEGER,
-                sermon_text TEXT,
-                audio_file_path TEXT,
-                status TEXT,
-                tags TEXT,  -- JSON array of tags
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS progression (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                book TEXT,
-                chapter INTEGER,
-                last_verse INTEGER,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.conn.commit()
+    def get_last_progression(self) -> tuple | None:
+        """Fetch the latest scripture passage progression from Supabase."""
+        response = self.client.table("progression") \
+            .select("book, chapter, last_end_verse") \
+            .order("updated_at", desc=True) \
+            .limit(1) \
+            .execute()
 
-    def add_sermon(self, title, book, chapter, start_verse, end_verse, sermon_text, audio_file_path, status, tags=None):
-        cursor = self.conn.cursor()
-        import json
-        tags_json = json.dumps(tags) if tags else "[]"
-        cursor.execute(
-            "INSERT INTO sermons (title, book, chapter, start_verse, end_verse, sermon_text, audio_file_path, status, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (title, book, chapter, start_verse, end_verse, sermon_text, audio_file_path, status, tags_json)
+        if response.data:
+            row = response.data[0]
+            return row["book"], row["chapter"], row["last_end_verse"]
+        return None
+
+    def update_progression(self, book: str, chapter: int, last_end_verse: int):
+        """Update progression tracker with the latest completed verse."""
+        self.client.table("progression").insert({
+            "book": book,
+            "chapter": chapter,
+            "last_end_verse": last_end_verse
+        }).execute()
+
+    def upload_audio_file(self, local_file_path: str, passage_ref: str) -> str:
+        """Uploads local MP3 file to Supabase Storage bucket and returns the public URL."""
+        if not os.path.exists(local_file_path):
+            print(f"[Storage Warning] File not found for upload: {local_file_path}")
+            return ""
+
+        safe_ref = passage_ref.replace(":", "_").replace(" ", "_").replace("/", "_")
+        remote_filename = f"{safe_ref}.mp3"
+
+        with open(local_file_path, "rb") as f:
+            file_bytes = f.read()
+
+        print(f"--> Uploading {remote_filename} to Supabase Storage...")
+        
+        self.client.storage.from_(AUDIO_BUCKET).upload(
+            path=remote_filename,
+            file=file_bytes,
+            file_options={"content-type": "audio/mpeg", "x-upsert": "true"}
         )
-        self.conn.commit()
-        return cursor.lastrowid
 
-    def get_last_studied_passage(self) -> Optional[Tuple]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM sermons ORDER BY id DESC LIMIT 1")
-        return cursor.fetchone()
+        public_url = self.client.storage.from_(AUDIO_BUCKET).get_public_url(remote_filename)
+        return public_url
 
-    def get_last_progression(self) -> Optional[Tuple]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT book, chapter, last_verse FROM progression ORDER BY id DESC LIMIT 1")
-        return cursor.fetchone()
+    def add_sermon(self, title: str, book: str, chapter: int, start_verse: int, end_verse: int,
+                   sermon_text: str, audio_file_path: str, status: str = "COMPLETE", tags: list = None) -> int:
+        """Uploads audio, generates embedding, and logs record into Supabase PostgreSQL."""
+        passage_ref = f"{book} {chapter}:{start_verse}-{end_verse}"
+        audio_url = ""
 
-    def update_progression(self, book: str, chapter: int, last_verse: int):
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "INSERT INTO progression (book, chapter, last_verse) VALUES (?, ?, ?)",
-            (book, chapter, last_verse)
-        )
-        self.conn.commit()
+        if audio_file_path and os.path.exists(audio_file_path):
+            audio_url = self.upload_audio_file(audio_file_path, passage_ref)
 
-    def search_sermons(self, query: str, by_passage: bool = False, by_tags: bool = False) -> List[sqlite3.Row]:
-        """Search sermons by passage reference or tags."""
-        cursor = self.conn.cursor()
-        if by_passage:
-            cursor.execute(
-                "SELECT * FROM sermons WHERE book LIKE ? OR title LIKE ? ORDER BY created_at DESC",
-                (f"%{query}%", f"%{query}%")
-            )
-        elif by_tags:
-            cursor.execute(
-                "SELECT * FROM sermons WHERE tags LIKE ? ORDER BY created_at DESC",
-                (f"%{query}%",)
-            )
-        else:
-            # Full-text search on sermon_text and title
-            cursor.execute(
-                "SELECT * FROM sermons WHERE sermon_text LIKE ? OR title LIKE ? ORDER BY created_at DESC",
-                (f"%{query}%", f"%{query}%")
-            )
-        return cursor.fetchall()
+        print("--> Generating vector embedding for semantic search...")
+        embedding_vector = generate_embedding(f"{title}\n{passage_ref}\n{sermon_text}")
 
-    def get_sermon_by_id(self, sermon_id: int) -> Optional[sqlite3.Row]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM sermons WHERE id = ?", (sermon_id,))
-        return cursor.fetchone()
+        sermon_data = {
+            "passage_ref": passage_ref,
+            "title": title,
+            "book": book,
+            "chapter": chapter,
+            "start_verse": start_verse,
+            "end_verse": end_verse,
+            "sermon_text": sermon_text,
+            "audio_url": audio_url,
+            "status": status,
+            "tags": tags or [book],
+        }
 
-    def get_all_sermons(self) -> List[sqlite3.Row]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM sermons ORDER BY created_at DESC")
-        return cursor.fetchall()
+        if embedding_vector:
+            sermon_data["embedding"] = embedding_vector
+
+        response = self.client.table("sermons").insert(sermon_data).execute()
+        
+        if response.data:
+            sermon_id = response.data[0]["id"]
+            print(f"--> [Supabase] Sermon logged successfully with vector embedding (ID: {sermon_id})")
+            return sermon_id
+        return 0

@@ -1,9 +1,0 @@
-
-======================================================================
-PREECH BOT NIGHTLY RUN - 2026-09-12 02:00:03
-======================================================================
-  [1/4] Genesis 27:31-40 | 659 words | Audio: ./audio/Genesis_27_31-40.mp3 | Tags: ['leadership', 'family', 'Isaac & Jacob', 'Providence', 'Genesis', 'sin', 'worship', 'promises', 'creation', 'faith']
-  [2/4] Genesis 28:1-10 | 910 words | Audio: ./audio/Genesis_28_1-10.mp3 | Tags: ['leadership', 'family', 'Isaac & Jacob', 'covenant', 'Genesis', 'sin', 'worship', 'promises', 'Providence', 'faith']
-  [3/4] Genesis 28:11-20 | 519 words | Audio: ./audio/Genesis_28_11-20.mp3 | Tags: ['family', 'Isaac & Jacob', 'covenant', 'Genesis', 'sin', 'promises', 'Providence', 'faith']
-  [4/4] Genesis 29:1-10 | 1106 words | Audio: ./audio/Genesis_29_1-10.mp3 | Tags: ['leadership', 'family', 'Isaac & Jacob', 'Providence', 'covenant', 'Genesis', 'sin', 'promises', 'creation', 'faith']
-Total sermons generated: 4
