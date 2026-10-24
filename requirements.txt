@@ -1,9 +1,6 @@
-chromadb
-crewai
-ollama
 kokoro-onnx
-boto3
 soundfile
+numpy
 openai
 python-dotenv
 supabase

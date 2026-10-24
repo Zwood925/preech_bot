@@ -125,10 +125,12 @@ def generate_audio(text: str, passage_ref: str, audio_dir: str = "./audio") -> s
     wav_path = output_path.replace(".mp3", ".wav")
     sf.write(wav_path, final_audio, sample_rate)
 
-    # Convert to MP3 via ffmpeg if available
+    # Convert to MP3 via ffmpeg if available.
+    # Speech is mono at 24 kHz, so 48 kbps mono sounds clean and keeps a ~17 min study near 6 MB
+    # (the old VBR -q:a 2 setting was ~24 MB each, which would be ~75 GB for the whole Bible).
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
-        ret = os.system(f'{ffmpeg} -y -i "{wav_path}" -codec:a libmp3lame -q:a 2 "{output_path}" 2>/dev/null')
+        ret = os.system(f'{ffmpeg} -y -i "{wav_path}" -ac 1 -codec:a libmp3lame -b:a 48k "{output_path}" 2>/dev/null')
         if ret == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
             os.remove(wav_path)
             return output_path

@@ -4,10 +4,16 @@ on:
   schedule:
     - cron: '0 2 * * *' # Runs automatically every day at 2:00 AM UTC
   workflow_dispatch: # Enables a manual "Run workflow" button in GitHub
+    inputs:
+      count:
+        description: 'How many studies to generate'
+        required: false
+        default: '2'
 
 jobs:
   generate-sermon:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Repository
@@ -16,19 +22,33 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
           cache: 'pip'
+
+      - name: Install system audio dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Daily Auto-Progression Sermon Engine
+      - name: Cache Kokoro model weights
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: kokoro-v1.0-weights
+
+      - name: Validate Bible canon data
+        run: python3 bible.py
+
+      - name: Run Daily Auto-Progression Sermon Engine (Genesis -> Revelation)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          PRIMARY_MODEL: "google/gemini-2.0-flash-exp:free"
-          FALLBACK_MODEL: "meta-llama/llama-3.3-70b-instruct:free"
-        run: python3 main.py --auto 2
+          # Quality tiers: override these in repo Variables if you want to change models without editing code.
+          RESEARCH_MODEL: ${{ vars.RESEARCH_MODEL || 'anthropic/claude-sonnet-4.5' }}
+          DRAFT_MODEL: ${{ vars.DRAFT_MODEL || 'anthropic/claude-sonnet-4.5' }}
+          UTILITY_MODEL: ${{ vars.UTILITY_MODEL || 'google/gemini-2.5-flash' }}
+        run: python3 main.py --auto ${{ github.event.inputs.count || '2' }}

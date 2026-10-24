@@ -14,7 +14,7 @@ import {
   Platform,
   Dimensions,
 } from 'react-native';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system'; // FIXED: removed /legacy
@@ -53,6 +53,7 @@ import {
   X,
   ChevronRight,
   AlertCircle,
+  ListChecks,
 } from 'lucide-react-native';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -61,6 +62,11 @@ import {
   PlusJakartaSans_500Medium,
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
+import type { Sermon, TestamentFilter } from './lib/types';
+import { GENRES, THEMES, testamentCode } from './lib/bible';
+import { BASE_COLUMNS, CHAT_MODEL, LEAN_COLUMNS, fetchSermonText, searchSermons } from './lib/api';
+import { ReadingPlan, loadPlans, planProgress, savePlans, toggleSermonComplete } from './lib/plans';
+import PlanScreen from './screens/PlanScreen';
 
 import * as SplashScreen from 'expo-splash-screen';
 SplashScreen.preventAutoHideAsync();
@@ -71,6 +77,7 @@ const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://placeholde
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'placeholder';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+const PAGE_SIZE = 60;
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SPEED_OPTIONS = [1.0, 1.25, 1.5, 2.0, 0.8];
 const OPENROUTER_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
@@ -81,18 +88,6 @@ const WAVEFORM_BARS = [
   0.5, 0.8, 0.3, 0.6, 1.0, 0.7, 0.4, 0.9, 0.5, 0.8, 0.3, 0.6, 0.9, 0.4, 0.7, 0.5,
   0.8, 0.3, 0.6, 1.0, 0.7, 0.4, 0.9, 0.5,
 ];
-
-interface Sermon {
-  id: number;
-  passage_ref: string;
-  title: string;
-  book: string;
-  chapter?: number;
-  sermon_text: string;
-  audio_url: string;
-  created_at: string;
-  similarity?: number;
-}
 
 interface BookmarkItem {
   id: number;
@@ -113,7 +108,7 @@ export default function App() {
     PlusJakartaSans_700Bold,
   });
 
-  const [activeTab, setActiveTab] = useState<'home' | 'player' | 'library'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'player' | 'library' | 'plans'>('home');
   const [sermons, setSermons] = useState<Sermon[]>([]);
   const [currentSermon, setCurrentSermon] = useState<Sermon | null>(null);
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([]);
@@ -123,6 +118,19 @@ export default function App() {
   const [isVectorSearching, setIsVectorSearching] = useState<boolean>(false);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [speedIndex, setSpeedIndex] = useState<number>(0);
+
+  // Library filters / pagination
+  const [testamentFilter, setTestamentFilter] = useState<TestamentFilter>('both');
+  const [genreFilter, setGenreFilter] = useState<string | null>(null);
+  const [themeFilter, setThemeFilter] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState<boolean>(false);
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
+  const [searchActive, setSearchActive] = useState<boolean>(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+
+  // Reading plans
+  const [plans, setPlans] = useState<ReadingPlan[]>([]);
+  const plansLoaded = useRef(false);
   
   // Debug State
   const [debugError, setDebugError] = useState<string | null>(null);
@@ -154,6 +162,11 @@ export default function App() {
   const documentDir = (FileSystem as any).documentDirectory || '';
 
   useEffect(() => {
+    // Keep playing with the screen locked / app backgrounded, and in iOS silent mode.
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     badgePulse.value = withRepeat(
       withTiming(1.2, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
       -1,
@@ -183,13 +196,46 @@ export default function App() {
     }
   }, [loading, fontsLoaded]);
 
+  // Reading plans: load once, persist on change.
+  useEffect(() => {
+    loadPlans().then((p) => {
+      setPlans(p);
+      plansLoaded.current = true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (plansLoaded.current) savePlans(plans);
+  }, [plans]);
+
+  // Re-query the library when filters change (after the initial load).
+  useEffect(() => {
+    if (loading) return;
+    if (searchActive && searchQuery.trim()) performVectorSearch();
+    else fetchAllSermons({ reset: true });
+  }, [testamentFilter, genreFilter, themeFilter]);
+
+  // Auto-complete the plan day when a study finishes playing.
+  useEffect(() => {
+    if (status.didJustFinish && currentSermon) {
+      const id = currentSermon.id;
+      setPlans((prev) => prev.map((p) => (p.sermons[id] ? toggleSermonComplete(p, id, true) : p)));
+    }
+  }, [status.didJustFinish]);
+
   const badgeAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: badgePulse.value }],
   }));
 
   
 
-  async function fetchAllSermons() {
+  /**
+   * Lean, paginated library fetch (never pulls sermon_text / embeddings).
+   * reset=true loads the first page with the current filters; reset=false appends the next page.
+   */
+  async function fetchAllSermons(opts: { reset?: boolean } = {}) {
+    const reset = opts.reset ?? true;
+    const filtersActive = testamentFilter !== 'both' || !!genreFilter || !!themeFilter;
     try {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -198,22 +244,44 @@ export default function App() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('sermons')
-        .select('*')
-        .order('id', { ascending: false });
+      if (!reset) setLoadingMore(true);
+      setLibraryError(null);
+      setSearchActive(false);
+      const from = reset ? 0 : sermons.length;
 
-      if (error) {
-        console.error('Error fetching sermons:', error);
-        setDebugError(`DB Error: ${error.message}`);
+      const build = (cols: string) => {
+        let q: any = supabase.from('sermons').select(cols);
+        const code = testamentCode(testamentFilter);
+        if (code) q = q.eq('testament', code);
+        if (genreFilter) q = q.eq('genre', genreFilter);
+        if (themeFilter) q = q.contains('tags', [themeFilter]);
+        return q.order('id', { ascending: false }).range(from, from + PAGE_SIZE - 1);
+      };
+
+      let res: any = await build(LEAN_COLUMNS);
+      if (res.error && !filtersActive) res = await build(BASE_COLUMNS); // migration not applied yet
+
+      if (res.error) {
+        console.error('Error fetching sermons:', res.error);
+        if (filtersActive) setLibraryError(`Filter failed: ${res.error.message}. Has the SQL migration been run?`);
+        else setDebugError(`DB Error: ${res.error.message}`);
+        return;
       }
-      if (data && data.length > 0) {
-        setSermons(data);
-        if (!currentSermon) {
+
+      const data: Sermon[] = res.data || [];
+      setHasMore(data.length === PAGE_SIZE);
+      if (data.length > 0) {
+        setSermons((prev) => {
+          if (reset) return data;
+          const seen = new Set(prev.map((s) => s.id));
+          return [...prev, ...data.filter((s) => !seen.has(s.id))];
+        });
+        if (reset && !currentSermon && !filtersActive) {
           selectSermon(data[0], false);
         }
-      } else {
-        if (!error) setDebugError('No studies found in database.');
+      } else if (reset) {
+        setSermons([]);
+        if (!filtersActive) setDebugError('No studies found in database.');
       }
     } catch (err: any) {
       console.error(err);
@@ -221,6 +289,14 @@ export default function App() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
+    }
+  }
+
+  async function loadSermonText(id: number) {
+    const text = await fetchSermonText(supabase, id);
+    if (text) {
+      setCurrentSermon((prev) => (prev && prev.id === id ? { ...prev, sermon_text: text } : prev));
     }
   }
 
@@ -229,6 +305,7 @@ export default function App() {
     setCurrentSermon(sermon);
     setChatMessages([]);
     fetchBookmarks(sermon.id);
+    if (!sermon.sermon_text) loadSermonText(sermon.id);
 
     if (sermon.audio_url) {
       setAudioUrl(sermon.audio_url);
@@ -364,40 +441,26 @@ export default function App() {
 
   async function performVectorSearch() {
     if (!searchQuery.trim()) {
-      fetchAllSermons();
+      setSearchActive(false);
+      fetchAllSermons({ reset: true });
       return;
     }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setIsVectorSearching(true);
+    setLibraryError(null);
     try {
-      const embRes = await fetch('https://openrouter.ai/api/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${OPENROUTER_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'openai/text-embedding-3-small',
-          input: searchQuery,
-        }),
+      const results = await searchSermons(supabase, OPENROUTER_KEY, searchQuery, {
+        testament: testamentFilter,
+        genre: genreFilter,
+        count: 25,
       });
-      const embData = await embRes.json();
-      const queryEmbedding = embData?.data?.[0]?.embedding;
-
-      if (queryEmbedding) {
-        const { data, error } = await supabase.rpc('match_sermons', {
-          query_embedding: queryEmbedding,
-          match_threshold: 0.1,
-          match_count: 10,
-        });
-
-        if (!error && data) {
-          setSermons(data);
-        }
-      }
-    } catch (err) {
+      setSermons(results);
+      setSearchActive(true);
+      setHasMore(false);
+    } catch (err: any) {
       console.error('Vector search error:', err);
+      setLibraryError(err?.message || 'Search failed.');
     } finally {
       setIsVectorSearching(false);
     }
@@ -421,7 +484,7 @@ export default function App() {
           Authorization: `Bearer ${OPENROUTER_KEY}`,
         },
         body: JSON.stringify({
-          model: 'openrouter/free',
+          model: CHAT_MODEL,
           messages: [
             {
               role: 'system',
@@ -456,7 +519,10 @@ export default function App() {
   const duration = status.duration || 1;
   const progressPercent = Math.min(1, Math.max(0, currentPos / duration));
 
-  const paragraphs = currentSermon?.sermon_text.split('\n\n') || [];
+  const paragraphs = (currentSermon?.sermon_text || '').split('\n\n').filter((p) => p.trim().length > 0);
+
+  const activePlan = plans.find((p) => !planProgress(p).finished);
+  const activePlanProgress = activePlan ? planProgress(activePlan) : null;
   const activeParagraphIndex = Math.min(
     paragraphs.length - 1,
     Math.floor(progressPercent * paragraphs.length)
@@ -559,6 +625,32 @@ export default function App() {
                   <Text style={styles.homePlayCTAText}>Play Today's Study</Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          )}
+
+          {/* Active Reading Plan */}
+          {activePlan && activePlanProgress && (
+            <View style={styles.homePlanCard}>
+              <Text style={styles.homePlanLabel}>YOUR READING PLAN</Text>
+              <Text style={styles.homePlanTitle}>{activePlan.title}</Text>
+              <View style={styles.homePlanTrack}>
+                <View style={[styles.homePlanFill, { width: `${Math.round(activePlanProgress.percent * 100)}%` }]} />
+              </View>
+              <Text style={styles.homePlanMeta}>
+                Day {activePlanProgress.nextDay?.day} of {activePlanProgress.totalDays} · {activePlanProgress.doneDays} finished
+              </Text>
+              <TouchableOpacity
+                style={styles.homePlayCTA}
+                onPress={() => {
+                  const day = activePlanProgress.nextDay;
+                  if (!day) return;
+                  const nextId = day.sermonIds.find((id) => !activePlan.completed.includes(id)) ?? day.sermonIds[0];
+                  playFromHome(activePlan.sermons[nextId]);
+                }}
+              >
+                <Play size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />
+                <Text style={styles.homePlayCTAText}>Play Day {activePlanProgress.nextDay?.day}</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -813,10 +905,60 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
+          {/* Categorization filters */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
+            {([['both', 'All'], ['old', 'Old Testament'], ['new', 'New Testament']] as [TestamentFilter, string][]).map(([key, label]) => (
+              <TouchableOpacity
+                key={key}
+                style={[styles.filterChip, testamentFilter === key && styles.filterChipActive]}
+                onPress={() => { Haptics.selectionAsync(); setTestamentFilter(key); }}
+              >
+                <Text style={[styles.filterChipText, testamentFilter === key && styles.filterChipTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
+            {GENRES.map((g) => (
+              <TouchableOpacity
+                key={g}
+                style={[styles.filterChip, genreFilter === g && styles.filterChipActive]}
+                onPress={() => { Haptics.selectionAsync(); setGenreFilter(genreFilter === g ? null : g); }}
+              >
+                <Text style={[styles.filterChipText, genreFilter === g && styles.filterChipTextActive]}>{g}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterRow, { marginBottom: 12 }]}>
+            {THEMES.map((t) => (
+              <TouchableOpacity
+                key={t}
+                style={[styles.filterChip, themeFilter === t && styles.filterChipActive]}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setSearchQuery('');
+                  setSearchActive(false);
+                  setThemeFilter(themeFilter === t ? null : t);
+                }}
+              >
+                <Text style={[styles.filterChipText, themeFilter === t && styles.filterChipTextActive]}>{t}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          {!!libraryError && <Text style={styles.libraryError}>{libraryError}</Text>}
+
           <FlatList
             data={sermons}
             keyExtractor={(item) => item.id.toString()}
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 140 }}
+            onEndReachedThreshold={0.4}
+            onEndReached={() => {
+              if (hasMore && !searchActive && !loadingMore) fetchAllSermons({ reset: false });
+            }}
+            ListEmptyComponent={
+              <Text style={styles.emptyLibraryText}>No studies match these filters yet.</Text>
+            }
+            ListFooterComponent={loadingMore ? <ActivityIndicator color="#818CF8" style={{ marginVertical: 16 }} /> : null}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -855,9 +997,11 @@ export default function App() {
                       )}
                     </View>
                     <Text style={styles.serifCardTitle}>{item.title}</Text>
-                    <Text style={styles.cardSnippetText} numberOfLines={2}>
-                      {item.sermon_text}
-                    </Text>
+                    {!!item.summary && (
+                      <Text style={styles.cardSnippetText} numberOfLines={3}>
+                        {item.summary}
+                      </Text>
+                    )}
                   </BlurView>
                 </TouchableOpacity>
               );
@@ -866,7 +1010,20 @@ export default function App() {
         </View>
       )}
 
-      {/* Floating 3-Tab Nav */}
+      {/* 4. PLANS TAB */}
+      {activeTab === 'plans' && (
+        <PlanScreen
+          supabase={supabase}
+          openrouterKey={OPENROUTER_KEY}
+          plans={plans}
+          onPlansChange={setPlans}
+          onPlay={playFromHome}
+          currentSermonId={currentSermon?.id}
+          isPlaying={player.playing}
+        />
+      )}
+
+      {/* Floating 4-Tab Nav */}
       <BlurView intensity={60} tint="dark" style={styles.floatingNavGlass}>
         <TouchableOpacity
           style={styles.navTab}
@@ -898,9 +1055,18 @@ export default function App() {
           }}
         >
           <BookOpen size={20} color={activeTab === 'library' ? '#818CF8' : '#64748B'} />
-          <Text style={[styles.navText, activeTab === 'library' && styles.navTextActive]}>
-            Library ({sermons.length})
-          </Text>
+          <Text style={[styles.navText, activeTab === 'library' && styles.navTextActive]}>Library</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.navTab}
+          onPress={() => {
+            Haptics.selectionAsync();
+            setActiveTab('plans');
+          }}
+        >
+          <ListChecks size={20} color={activeTab === 'plans' ? '#818CF8' : '#64748B'} />
+          <Text style={[styles.navText, activeTab === 'plans' && styles.navTextActive]}>Plans</Text>
         </TouchableOpacity>
       </BlurView>
 
@@ -1268,4 +1434,21 @@ const styles = StyleSheet.create({
   chatInputFlex: { flex: 1, backgroundColor: '#070A12', color: '#F8FAFC', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, fontFamily: 'PlusJakartaSans_500Medium' },
   chatSendBtn: { backgroundColor: '#4F46E5', borderRadius: 14, paddingHorizontal: 18, justifyContent: 'center' },
   chatSendBtnText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_700Bold' },
+
+  // Library filters
+  filterRow: { marginBottom: 8, flexGrow: 0 },
+  filterChip: { backgroundColor: 'rgba(51, 65, 85, 0.45)', paddingVertical: 7, paddingHorizontal: 13, borderRadius: 16, marginRight: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  filterChipActive: { backgroundColor: '#4F46E5', borderColor: '#818CF8' },
+  filterChipText: { color: '#CBD5E1', fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold' },
+  filterChipTextActive: { color: '#FFFFFF' },
+  libraryError: { color: '#F87171', fontSize: 12, marginBottom: 8, fontFamily: 'PlusJakartaSans_500Medium' },
+  emptyLibraryText: { color: '#94A3B8', textAlign: 'center', marginTop: 40, fontFamily: 'PlusJakartaSans_500Medium' },
+
+  // Home plan card
+  homePlanCard: { backgroundColor: 'rgba(30, 41, 59, 0.5)', borderRadius: 20, padding: 18, borderWidth: 1, borderColor: 'rgba(129, 140, 248, 0.35)', marginBottom: 20 },
+  homePlanLabel: { color: '#A5B4FC', fontSize: 10, letterSpacing: 1.2, fontFamily: 'PlusJakartaSans_700Bold', marginBottom: 6 },
+  homePlanTitle: { color: '#F8FAFC', fontSize: 17, fontFamily: 'Cinzel_700Bold', marginBottom: 10 },
+  homePlanTrack: { height: 8, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 4, overflow: 'hidden', marginBottom: 8 },
+  homePlanFill: { height: 8, backgroundColor: '#818CF8', borderRadius: 4 },
+  homePlanMeta: { color: '#94A3B8', fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium', marginBottom: 12 },
 });
