@@ -12,7 +12,9 @@
       "userInterfaceStyle": "dark",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -36,7 +38,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#070A12"
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "extra": {
       "eas": {
